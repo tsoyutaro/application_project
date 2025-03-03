@@ -1,3 +1,4 @@
+//特に意味ない。時々保存用。
 import 'package:flutter/material.dart';
 
 // グローバル変数（ホームで選択した気分と日記の情報を保持するため）

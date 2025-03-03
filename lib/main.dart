@@ -18,6 +18,10 @@ ValueNotifier<Map<String, int>> globalMoodNotifier = ValueNotifier(
   globalMoodMap,
 );
 
+ValueNotifier<Map<String, String>> globalDiaryNotifier = ValueNotifier(
+  globalDiaryMap,
+);
+
 void main() {
   runApp(MyApp());
 }
@@ -444,6 +448,10 @@ class _DiaryPageState extends State<DiaryPage> {
         child: ElevatedButton(
           child: const Text('完了'),
           onPressed: () {
+            String key =
+                '${_currentDate.year}-${_currentDate.month}-${_currentDate.day}';
+            globalDiaryMap[key] = _diaryController.text;
+            globalDiaryNotifier.value = Map.from(globalDiaryMap);
             Navigator.pop(context, _selectedMoodIndex);
           },
         ),
@@ -494,7 +502,6 @@ class _DatabasePageState extends State<DatabasePage> {
     });
   }
 
-  // 日時表示部分（左右に◀▶、中央に日時テキスト、その右に編集ボタン）
   Widget _buildDateRow() {
     String dateText =
         '${_selectedDate.year}/${_selectedDate.month}/${_selectedDate.day}';
@@ -510,9 +517,28 @@ class _DatabasePageState extends State<DatabasePage> {
                   _changeDateByDays(-1);
                 },
               ),
-              Text(
-                dateText,
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              GestureDetector(
+                onTap: () async {
+                  DateTime? picked = await showDatePicker(
+                    context: context,
+                    initialDate: _selectedDate,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime(2100),
+                  );
+                  if (picked != null) {
+                    setState(() {
+                      _selectedDate = picked;
+                      String newKey =
+                          '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
+                      _diaryController.text = globalDiaryMap[newKey] ?? '';
+                      _localMood = globalMoodMap[newKey] ?? 2;
+                    });
+                  }
+                },
+                child: Text(
+                  dateText,
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
               ),
               IconButton(
                 icon: Icon(Icons.arrow_right),
@@ -612,26 +638,38 @@ class _DatabasePageState extends State<DatabasePage> {
                 fontSize: 20, // フォントサイズを20に設定（お好みで調整）
               ),
             ),
-            Container(
-              padding: const EdgeInsets.all(8.0),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey),
-                borderRadius: BorderRadius.circular(4.0),
-              ),
-              child: TextField(
-                controller: _diaryController,
-                maxLines: 5,
-                readOnly: !_isEditing,
-                decoration: const InputDecoration.collapsed(
-                  hintText: '日記を記入してください...',
-                ),
-                onChanged:
-                    _isEditing
-                        ? (text) {
-                          globalDiaryMap[key] = text;
-                        }
-                        : null,
-              ),
+            ValueListenableBuilder<Map<String, String>>(
+              valueListenable: globalDiaryNotifier,
+              builder: (context, diaryMap, child) {
+                String currentDiary = diaryMap[key] ?? '';
+                if (_diaryController.text != currentDiary) {
+                  _diaryController.text = currentDiary;
+                }
+                return Container(
+                  padding: const EdgeInsets.all(8.0),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade800), // 濃い枠線
+                    borderRadius: BorderRadius.circular(4.0),
+                  ),
+                  child: TextField(
+                    controller: _diaryController,
+                    maxLines: 5,
+                    readOnly: !_isEditing,
+                    decoration: const InputDecoration.collapsed(
+                      hintText: '日記を記入してください...',
+                    ),
+                    onChanged:
+                        _isEditing
+                            ? (text) {
+                              globalDiaryMap[key] = text;
+                              globalDiaryNotifier.value = Map.from(
+                                globalDiaryMap,
+                              );
+                            }
+                            : null,
+                  ),
+                );
+              },
             ),
           ],
         ),

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 // グローバル変数（ホームで選択した気分と日記の情報を保持するため）
 Map<String, int> globalMoodMap = {};
-Map<String, String> globalDiaryMap = {}; // 今回は仮置きのため未使用
+Map<String, String> globalDiaryMap = {};
 
 // 気分アイコンのグローバル定数
 const List<IconData> kMoodIcons = [
@@ -31,7 +31,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'My Calendar Diary App',
+      title: 'Emonator',
       theme: ThemeData(primarySwatch: Colors.blue),
       home: MainScreen(),
     );
@@ -61,7 +61,7 @@ class _MainScreenState extends State<MainScreen> {
     // 各ページごとにヘッダーのタイトルを切り替え
     String appBarTitle;
     if (_selectedIndex == 0) {
-      appBarTitle = 'My Calendar Diary App';
+      appBarTitle = 'Emonator';
     } else if (_selectedIndex == 1) {
       appBarTitle = 'Database';
     } else {
@@ -86,27 +86,34 @@ class _MainScreenState extends State<MainScreen> {
           _selectedIndex == 0
               ? FloatingActionButton(
                 onPressed: () async {
-                  // 現在の日付（年、月、日）を取得
+                  // 現在の日付を取得
                   DateTime now = DateTime.now();
                   DateTime today = DateTime(now.year, now.month, now.day);
-                  // DiaryPage へ遷移（firebase連携は未実装）
-                  int? selectedMood = await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => DiaryPage(date: today),
-                    ),
-                  );
-                  // 戻り値（選択した気分）があればグローバル変数に更新
-                  if (selectedMood != null) {
-                    String key = '${today.year}-${today.month}-${today.day}';
-                    globalMoodMap[key] = selectedMood;
-                    globalMoodNotifier.value = Map.from(globalMoodMap);
-                    setState(() {});
+                  try {
+                    int? selectedMood = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => DiaryPage(date: today),
+                      ),
+                    );
+                    if (selectedMood != null) {
+                      String key = '${today.year}-${today.month}-${today.day}';
+                      globalMoodMap[key] = selectedMood;
+                      globalMoodNotifier.value = Map.from(globalMoodMap);
+                      if (mounted) {
+                        setState(() {});
+                      }
+                    }
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('DiaryPage への遷移中にエラーが発生しました: $e')),
+                    );
                   }
                 },
                 child: Icon(Icons.today),
               )
               : null,
+
       body: IndexedStack(index: _selectedIndex, children: _pages),
       bottomNavigationBar: BottomNavigationBar(
         items: <BottomNavigationBarItem>[
@@ -193,16 +200,22 @@ class _HomePageState extends State<HomePage> {
               ),
               GestureDetector(
                 onTap: () async {
-                  DateTime? picked = await showDatePicker(
-                    context: context,
-                    initialDate: _selectedMonth,
-                    firstDate: DateTime(2000),
-                    lastDate: DateTime(2100),
-                  );
-                  if (picked != null) {
-                    setState(() {
-                      _selectedMonth = DateTime(picked.year, picked.month, 1);
-                    });
+                  try {
+                    DateTime? picked = await showDatePicker(
+                      context: context,
+                      initialDate: _selectedMonth,
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime(2100),
+                    );
+                    if (picked != null) {
+                      setState(() {
+                        _selectedMonth = DateTime(picked.year, picked.month, 1);
+                      });
+                    }
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('日付選択中にエラーが発生しました: $e')),
+                    );
                   }
                 },
                 child: Text(
@@ -210,6 +223,7 @@ class _HomePageState extends State<HomePage> {
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
               ),
+
               IconButton(
                 icon: Icon(Icons.arrow_right),
                 onPressed: () {
@@ -240,100 +254,110 @@ class _HomePageState extends State<HomePage> {
           ),
           // 3. カレンダーグリッド
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: GridView.builder(
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 7,
-                  crossAxisSpacing: 4,
-                  mainAxisSpacing: 4,
-                ),
-                itemCount: totalCells,
-                itemBuilder: (context, index) {
-                  if (index < weekdayOffset) {
-                    return Container(); // 前月分の空セル
-                  } else {
-                    int day = index - weekdayOffset + 1;
-                    DateTime cellDate = DateTime(
-                      _selectedMonth.year,
-                      _selectedMonth.month,
-                      day,
-                    );
-                    String key =
-                        '${cellDate.year}-${cellDate.month}-${cellDate.day}';
-                    DateTime now = DateTime.now();
-                    // 当日と比較（時刻は無視）
-                    bool isToday =
-                        (now.year == cellDate.year &&
-                            now.month == cellDate.month &&
-                            now.day == cellDate.day);
-                    // カレンダーグリッド内の日付セル（itemBuilder 内）
-                    return Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text('$day'),
-                        const SizedBox(height: 4),
-                        GestureDetector(
-                          onTap: () async {
-                            // DiaryPage へ遷移
-                            int? selectedMood = await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => DiaryPage(date: cellDate),
+            child: GridView.builder(
+              // ここを追加
+              //shrinkWrap: true,
+              physics:
+                  const BouncingScrollPhysics(), // または AlwaysScrollableScrollPhysics()
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 7,
+                crossAxisSpacing: 4,
+                mainAxisSpacing: 4,
+                childAspectRatio: 1.0, // <-- 高さ方向にゆとりをもたせる
+              ),
+
+              itemCount: totalCells,
+              itemBuilder: (context, index) {
+                if (index < weekdayOffset) {
+                  return Container(); // 前月分の空セル
+                } else {
+                  int day = index - weekdayOffset + 1;
+                  DateTime cellDate = DateTime(
+                    _selectedMonth.year,
+                    _selectedMonth.month,
+                    day,
+                  );
+                  String key =
+                      '${cellDate.year}-${cellDate.month}-${cellDate.day}';
+                  DateTime now = DateTime.now();
+                  // 当日と比較（時刻は無視）
+                  bool isToday =
+                      (now.year == cellDate.year &&
+                          now.month == cellDate.month &&
+                          now.day == cellDate.day);
+                  // 日付表示用のウィジェットを共通化
+                  Widget dayCircle = Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color:
+                          isToday ? Colors.blue.shade900 : Colors.transparent,
+                    ),
+                    child: Center(
+                      child: Text(
+                        '$day',
+                        style: TextStyle(
+                          color: isToday ? Colors.white : Colors.black,
+                        ),
+                      ),
+                    ),
+                  );
+                  // カレンダーグリッド内の日付セル（itemBuilder 内）
+                  return Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // 日付の部分：当日は背景付き（例：濃い青）で日付を白文字表示
+                      dayCircle,
+                      const SizedBox(height: 4),
+                      // 気分ボタン：全日共通のサイズに統一
+                      GestureDetector(
+                        onTap: () async {
+                          int? selectedMood = await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => DiaryPage(date: cellDate),
+                            ),
+                          );
+                          if (selectedMood != null) {
+                            globalMoodMap[key] = selectedMood;
+                            globalMoodNotifier.value = Map.from(globalMoodMap);
+                            setState(() {});
+                          }
+                        },
+                        child: ValueListenableBuilder<Map<String, int>>(
+                          valueListenable: globalMoodNotifier,
+                          builder: (context, moodMap, child) {
+                            const double buttonSize = 20;
+                            final bool hasMood = moodMap.containsKey(key);
+                            return Container(
+                              width: buttonSize,
+                              height: buttonSize,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color:
+                                    hasMood
+                                        ? Colors.transparent
+                                        : Colors.lightBlue.shade100,
+                              ),
+                              child: Center(
+                                child:
+                                    hasMood
+                                        ? Icon(
+                                          kMoodIcons[moodMap[key]!],
+                                          size: buttonSize,
+                                          color: Colors.blue.shade900,
+                                        )
+                                        : Container(),
                               ),
                             );
-                            // 戻り値（選択した気分）があればグローバル変数に更新
-                            if (selectedMood != null) {
-                              globalMoodMap[key] = selectedMood;
-                              globalMoodNotifier.value = Map.from(
-                                globalMoodMap,
-                              );
-                              setState(() {});
-                            }
                           },
-                          child: ValueListenableBuilder<Map<String, int>>(
-                            valueListenable: globalMoodNotifier,
-                            builder: (context, moodMap, child) {
-                              final bool hasMood = moodMap.containsKey(key);
-                              // 未入力の場合は薄い青、入力済みなら濃い青
-                              Color bgColor =
-                                  hasMood
-                                      ? Colors.blue.shade900
-                                      : Colors.lightBlue.shade100;
-                              return Container(
-                                width: isToday ? 30 : 24,
-                                height: isToday ? 30 : 24,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: bgColor,
-                                  // 本日の場合は枠線を追加
-                                  border:
-                                      isToday
-                                          ? Border.all(
-                                            color: Colors.blue.shade900,
-                                            width: 2,
-                                          )
-                                          : null,
-                                ),
-                                child: Center(
-                                  child:
-                                      hasMood
-                                          ? Icon(
-                                            kMoodIcons[moodMap[key]!],
-                                            size: isToday ? 20 : 16,
-                                            color: Colors.white,
-                                          )
-                                          : Container(), // 未入力の場合は中身は空
-                                ),
-                              );
-                            },
-                          ),
                         ),
-                      ],
-                    );
-                  }
-                },
-              ),
+                      ),
+                    ],
+                  );
+                }
+              },
             ),
           ),
         ],
@@ -371,11 +395,15 @@ class _DiaryPageState extends State<DiaryPage> {
   void initState() {
     super.initState();
     _currentDate = widget.date;
-    // すでにグローバル変数に気分が設定されている場合は、初期状態として反映
     String key =
         '${_currentDate.year}-${_currentDate.month}-${_currentDate.day}';
+    // 既存の気分を反映
     if (globalMoodMap.containsKey(key)) {
       _selectedMoodIndex = globalMoodMap[key]!;
+    }
+    // 既存の日記内容を反映
+    if (globalDiaryMap.containsKey(key)) {
+      _diaryController.text = globalDiaryMap[key]!;
     }
   }
 
@@ -387,16 +415,22 @@ class _DiaryPageState extends State<DiaryPage> {
         // タップで日付変更可能なタイトル
         title: GestureDetector(
           onTap: () async {
-            DateTime? picked = await showDatePicker(
-              context: context,
-              initialDate: _currentDate,
-              firstDate: DateTime(2000),
-              lastDate: DateTime(2100),
-            );
-            if (picked != null) {
-              setState(() {
-                _currentDate = picked;
-              });
+            try {
+              DateTime? picked = await showDatePicker(
+                context: context,
+                initialDate: _currentDate,
+                firstDate: DateTime(2000),
+                lastDate: DateTime(2100),
+              );
+              if (picked != null) {
+                setState(() {
+                  _currentDate = picked;
+                });
+              }
+            } catch (e) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('日付選択中にエラーが発生しました: $e')));
             }
           },
           child: Text(
@@ -448,11 +482,27 @@ class _DiaryPageState extends State<DiaryPage> {
         child: ElevatedButton(
           child: const Text('完了'),
           onPressed: () {
-            String key =
-                '${_currentDate.year}-${_currentDate.month}-${_currentDate.day}';
-            globalDiaryMap[key] = _diaryController.text;
-            globalDiaryNotifier.value = Map.from(globalDiaryMap);
-            Navigator.pop(context, _selectedMoodIndex);
+            if (_diaryController.text.length > 100) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('日記は100文字以内で入力してください')));
+              return;
+            }
+            try {
+              ScaffoldMessenger.of(context).clearSnackBars();
+              String key =
+                  '${_currentDate.year}-${_currentDate.month}-${_currentDate.day}';
+              globalDiaryMap[key] = _diaryController.text;
+              globalDiaryNotifier.value = Map.from(globalDiaryMap);
+              // 気分が未選択の場合は null を返して、更新しない状態を維持する
+              int? moodToReturn =
+                  (_selectedMoodIndex == -1) ? null : _selectedMoodIndex;
+              Navigator.pop(context, moodToReturn);
+            } catch (e) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('保存中にエラーが発生しました: $e')));
+            }
           },
         ),
       ),
@@ -487,8 +537,8 @@ class _DatabasePageState extends State<DatabasePage> {
     String key =
         '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
     _diaryController = TextEditingController(text: globalDiaryMap[key] ?? '');
-    // ホームで選択されている気分があれば反映、なければ中立（index: 2）をデフォルトに
-    _localMood = globalMoodMap[key] ?? 2;
+    // ホームで選択された気分があれば反映、なければ null（何も選択されていない状態）にする
+    _localMood = globalMoodMap[key];
   }
 
   // 日付を1日進めたり戻したりするヘルパーメソッド
@@ -498,27 +548,28 @@ class _DatabasePageState extends State<DatabasePage> {
       String newKey =
           '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
       _diaryController.text = globalDiaryMap[newKey] ?? '';
-      _localMood = globalMoodMap[newKey] ?? 2;
+      _localMood = globalMoodMap[newKey]; // デフォルト値なし
     });
   }
 
   Widget _buildDateRow() {
     String dateText =
         '${_selectedDate.year}/${_selectedDate.month}/${_selectedDate.day}';
-    return Row(
+    return Column(
       children: [
-        Expanded(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(
-                icon: Icon(Icons.arrow_left),
-                onPressed: () {
-                  _changeDateByDays(-1);
-                },
-              ),
-              GestureDetector(
-                onTap: () async {
+        // 1行目：日付表示と左右矢印（センター配置）
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            IconButton(
+              icon: Icon(Icons.arrow_left),
+              onPressed: () {
+                _changeDateByDays(-1);
+              },
+            ),
+            GestureDetector(
+              onTap: () async {
+                try {
                   DateTime? picked = await showDatePicker(
                     context: context,
                     initialDate: _selectedDate,
@@ -531,41 +582,57 @@ class _DatabasePageState extends State<DatabasePage> {
                       String newKey =
                           '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
                       _diaryController.text = globalDiaryMap[newKey] ?? '';
-                      _localMood = globalMoodMap[newKey] ?? 2;
+                      _localMood = globalMoodMap[newKey]; // デフォルト値なし
                     });
                   }
-                },
-                child: Text(
-                  dateText,
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                ),
-              ),
-              IconButton(
-                icon: Icon(Icons.arrow_right),
-                onPressed: () {
-                  _changeDateByDays(1);
-                },
-              ),
-            ],
-          ),
-        ),
-        // 編集ボタンを右端に配置
-        IconButton(
-          icon: Icon(_isEditing ? Icons.check : Icons.edit),
-          tooltip: _isEditing ? '編集OFF' : '編集ON',
-          onPressed: () {
-            setState(() {
-              if (_isEditing) {
-                String key =
-                    '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
-                if (_localMood != null) {
-                  globalMoodMap[key] = _localMood!;
-                  globalMoodNotifier.value = Map.from(globalMoodMap);
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('日付選択中にエラーが発生しました: $e')),
+                  );
                 }
-              }
-              _isEditing = !_isEditing;
-            });
-          },
+              },
+              child: Text(
+                dateText,
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+            ),
+            IconButton(
+              icon: Icon(Icons.arrow_right),
+              onPressed: () {
+                _changeDateByDays(1);
+              },
+            ),
+          ],
+        ),
+        // 2行目：編集ボタン（右寄せ）
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            IconButton(
+              icon: Icon(_isEditing ? Icons.check : Icons.edit),
+              tooltip: _isEditing ? '編集OFF' : '編集ON',
+              onPressed: () {
+                // 編集モードを解除する際に文字数チェックを実施
+                if (_isEditing) {
+                  if (_diaryController.text.length > 100) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('日記は100文字以内で入力してください')),
+                    );
+                    return; // エラー発生時は編集モードを解除しない
+                  }
+                  String key =
+                      '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
+                  if (_localMood != null) {
+                    globalMoodMap[key] = _localMood!;
+                    globalMoodNotifier.value = Map.from(globalMoodMap);
+                  }
+                }
+                setState(() {
+                  _isEditing = !_isEditing;
+                });
+              },
+            ),
+          ],
         ),
       ],
     );
@@ -633,10 +700,7 @@ class _DatabasePageState extends State<DatabasePage> {
             const SizedBox(height: 16),
             Text(
               'Diary:',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 20, // フォントサイズを20に設定（お好みで調整）
-              ),
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
             ),
             ValueListenableBuilder<Map<String, String>>(
               valueListenable: globalDiaryNotifier,
@@ -648,7 +712,7 @@ class _DatabasePageState extends State<DatabasePage> {
                 return Container(
                   padding: const EdgeInsets.all(8.0),
                   decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade800), // 濃い枠線
+                    border: Border.all(color: Colors.grey.shade800),
                     borderRadius: BorderRadius.circular(4.0),
                   ),
                   child: TextField(

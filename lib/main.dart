@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:hive/hive.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 // グローバル変数（ホームで選択した気分と日記の情報を保持するため）
 Map<String, int> globalMoodMap = {};
@@ -22,7 +24,29 @@ ValueNotifier<Map<String, String>> globalDiaryNotifier = ValueNotifier(
   globalDiaryMap,
 );
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Hive.initFlutter();
+  var diaryBox = await Hive.openBox('diary');
+
+  // Hiveに保存されている各エントリをグローバル変数に読み込み
+  for (var key in diaryBox.keys) {
+    var entry = diaryBox.get(key);
+    if (entry is Map) {
+      if (entry['mood'] != null &&
+          entry['mood'] is int &&
+          entry['mood'] != -1) {
+        globalMoodMap[key] = entry['mood'];
+      }
+      if (entry['diary'] != null && entry['diary'] is String) {
+        globalDiaryMap[key] = entry['diary'];
+      }
+    }
+  }
+  // ValueNotifierに反映させる
+  globalMoodNotifier.value = Map.from(globalMoodMap);
+  globalDiaryNotifier.value = Map.from(globalDiaryMap);
+
   runApp(MyApp());
 }
 
@@ -96,13 +120,15 @@ class _MainScreenState extends State<MainScreen> {
                         builder: (context) => DiaryPage(date: today),
                       ),
                     );
+                    String key = '${today.year}-${today.month}-${today.day}';
                     if (selectedMood != null) {
-                      String key = '${today.year}-${today.month}-${today.day}';
                       globalMoodMap[key] = selectedMood;
-                      globalMoodNotifier.value = Map.from(globalMoodMap);
-                      if (mounted) {
-                        setState(() {});
-                      }
+                    } else {
+                      globalMoodMap.remove(key); // 未選択の場合はキーを削除
+                    }
+                    globalMoodNotifier.value = Map.from(globalMoodMap);
+                    if (mounted) {
+                      setState(() {});
                     }
                   } catch (e) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -395,8 +421,15 @@ class _DiaryPageState extends State<DiaryPage> {
   void initState() {
     super.initState();
     _currentDate = widget.date;
+    var diaryBox = Hive.box('diary');
     String key =
         '${_currentDate.year}-${_currentDate.month}-${_currentDate.day}';
+    var entry = diaryBox.get(key);
+    if (entry != null) {
+      _selectedMoodIndex = entry['mood'] ?? -1;
+      _diaryController.text = entry['diary'] ?? '';
+    }
+
     // 既存の気分を反映
     if (globalMoodMap.containsKey(key)) {
       _selectedMoodIndex = globalMoodMap[key]!;
@@ -454,12 +487,18 @@ class _DiaryPageState extends State<DiaryPage> {
                   ),
                   onPressed: () {
                     setState(() {
-                      _selectedMoodIndex = index;
+                      // 同じボタンが再タップされた場合はリセットする
+                      if (_selectedMoodIndex == index) {
+                        _selectedMoodIndex = -1;
+                      } else {
+                        _selectedMoodIndex = index;
+                      }
                     });
                   },
                 );
               }),
             ),
+
             const SizedBox(height: 16),
             // 日記記入用テキストフィールド
             Expanded(
@@ -490,11 +529,25 @@ class _DiaryPageState extends State<DiaryPage> {
             }
             try {
               ScaffoldMessenger.of(context).clearSnackBars();
+              var diaryBox = Hive.box('diary');
               String key =
                   '${_currentDate.year}-${_currentDate.month}-${_currentDate.day}';
+              // グローバル変数の更新と同時に Hive に書き込む
+              if (_selectedMoodIndex == -1) {
+                // 未選択の場合はキー削除
+                globalMoodMap.remove(key);
+                diaryBox.delete(key); // 必要に応じて削除も行う
+              } else {
+                globalMoodMap[key] = _selectedMoodIndex;
+                diaryBox.put(key, {
+                  'mood': _selectedMoodIndex,
+                  'diary': _diaryController.text,
+                });
+              }
               globalDiaryMap[key] = _diaryController.text;
+              globalMoodNotifier.value = Map.from(globalMoodMap);
               globalDiaryNotifier.value = Map.from(globalDiaryMap);
-              // 気分が未選択の場合は null を返して、更新しない状態を維持する
+              // 完了時に、未選択なら null を返す
               int? moodToReturn =
                   (_selectedMoodIndex == -1) ? null : _selectedMoodIndex;
               Navigator.pop(context, moodToReturn);
@@ -507,6 +560,12 @@ class _DiaryPageState extends State<DiaryPage> {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _diaryController.dispose();
+    super.dispose();
   }
 }
 
@@ -529,7 +588,7 @@ class _DatabasePageState extends State<DatabasePage> {
   );
   late TextEditingController _diaryController;
   bool _isEditing = false; // 編集モード（初期はOFF）
-  int? _localMood; // 編集モード中の気分状態を保持するローカル変数
+  int _localMood = -1; // 編集モード中の気分状態。未選択は -1
 
   @override
   void initState() {
@@ -537,8 +596,8 @@ class _DatabasePageState extends State<DatabasePage> {
     String key =
         '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
     _diaryController = TextEditingController(text: globalDiaryMap[key] ?? '');
-    // ホームで選択された気分があれば反映、なければ null（何も選択されていない状態）にする
-    _localMood = globalMoodMap[key];
+    // globalMoodMap にあれば反映、なければ -1 をセット
+    _localMood = globalMoodMap[key] ?? -1;
   }
 
   // 日付を1日進めたり戻したりするヘルパーメソッド
@@ -548,7 +607,8 @@ class _DatabasePageState extends State<DatabasePage> {
       String newKey =
           '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
       _diaryController.text = globalDiaryMap[newKey] ?? '';
-      _localMood = globalMoodMap[newKey]; // デフォルト値なし
+      // globalMoodMap にあれば、その値、なければ -1 をセット
+      _localMood = globalMoodMap[newKey] ?? -1;
     });
   }
 
@@ -557,7 +617,7 @@ class _DatabasePageState extends State<DatabasePage> {
         '${_selectedDate.year}/${_selectedDate.month}/${_selectedDate.day}';
     return Column(
       children: [
-        // 1行目：日付表示と左右矢印（センター配置）
+        // 日付表示と左右矢印
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -582,7 +642,7 @@ class _DatabasePageState extends State<DatabasePage> {
                       String newKey =
                           '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
                       _diaryController.text = globalDiaryMap[newKey] ?? '';
-                      _localMood = globalMoodMap[newKey]; // デフォルト値なし
+                      _localMood = globalMoodMap[newKey] ?? -1;
                     });
                   }
                 } catch (e) {
@@ -604,7 +664,7 @@ class _DatabasePageState extends State<DatabasePage> {
             ),
           ],
         ),
-        // 2行目：編集ボタン（右寄せ）
+        // 編集切替ボタン
         Row(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
@@ -612,20 +672,33 @@ class _DatabasePageState extends State<DatabasePage> {
               icon: Icon(_isEditing ? Icons.check : Icons.edit),
               tooltip: _isEditing ? '編集OFF' : '編集ON',
               onPressed: () {
-                // 編集モードを解除する際に文字数チェックを実施
+                String key =
+                    '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
                 if (_isEditing) {
                   if (_diaryController.text.length > 100) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('日記は100文字以内で入力してください')),
                     );
-                    return; // エラー発生時は編集モードを解除しない
+                    return; // エラー時は切替しない
                   }
                   String key =
                       '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
-                  if (_localMood != null) {
-                    globalMoodMap[key] = _localMood!;
-                    globalMoodNotifier.value = Map.from(globalMoodMap);
+                  if (_localMood == -1) {
+                    globalMoodMap.remove(key);
+                    // 必要に応じて Hive からも削除
+                    Hive.box('diary').delete(key);
+                  } else {
+                    globalMoodMap[key] = _localMood;
                   }
+                  globalMoodNotifier.value = Map.from(globalMoodMap);
+                  // ここで日記内容も Hive に書き込む
+                  Hive.box('diary').put(key, {
+                    'mood': _localMood,
+                    'diary': _diaryController.text,
+                  });
+                } else {
+                  // 編集ON時、最新の値を反映
+                  _localMood = globalMoodMap[key] ?? -1;
                 }
                 setState(() {
                   _isEditing = !_isEditing;
@@ -674,7 +747,12 @@ class _DatabasePageState extends State<DatabasePage> {
             ),
             onPressed: () {
               setState(() {
-                _localMood = index;
+                // 同じボタンが再タップされた場合はリセットする
+                if (_localMood == index) {
+                  _localMood = -1;
+                } else {
+                  _localMood = index;
+                }
               });
             },
           );
@@ -739,6 +817,12 @@ class _DatabasePageState extends State<DatabasePage> {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _diaryController.dispose();
+    super.dispose();
   }
 }
 

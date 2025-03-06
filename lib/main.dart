@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:local_auth/local_auth.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 // グローバル変数（ホームで選択した気分と日記の情報を保持するため）
 Map<String, int> globalMoodMap = {};
@@ -24,6 +26,213 @@ ValueNotifier<Map<String, String>> globalDiaryNotifier = ValueNotifier(
   globalDiaryMap,
 );
 
+final FlutterSecureStorage secureStorage = FlutterSecureStorage();
+
+/// 起動時の認証処理を実施するウィジェット（認証設定がOFFならスルー）
+class StartupScreen extends StatefulWidget {
+  @override
+  _StartupScreenState createState() => _StartupScreenState();
+}
+
+class _StartupScreenState extends State<StartupScreen> {
+  final LocalAuthentication auth = LocalAuthentication();
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAuth();
+  }
+
+  Future<void> _checkAuth() async {
+    // secureStorageから認証設定を読み込む（未設定ならデフォルトはOFF）
+    String? biometricFlag = await secureStorage.read(key: 'enableBiometric');
+    String? pinFlag = await secureStorage.read(key: 'enablePin');
+    bool enableBiometric = biometricFlag == 'true';
+    bool enablePin = pinFlag == 'true';
+
+    // 認証設定がどちらもOFFの場合、すぐにメイン画面へ
+    if (!enableBiometric && !enablePin) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => MainScreen()),
+      );
+      return;
+    }
+
+    // 生体認証がONの場合、まず生体認証を試行
+    if (enableBiometric) {
+      bool authenticated = false;
+      try {
+        authenticated = await auth.authenticate(
+          localizedReason: 'アプリ利用のため認証してください',
+          options: const AuthenticationOptions(
+            stickyAuth: true,
+            biometricOnly: true,
+          ),
+        );
+      } catch (e) {
+        print('生体認証エラー: $e');
+      }
+      if (authenticated) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => MainScreen()),
+        );
+        return;
+      } else {
+        // 生体認証失敗時、PIN認証がONならPIN認証へ
+        if (enablePin) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => PinAuthPage()),
+          );
+          return;
+        }
+      }
+    } else if (enablePin) {
+      // 生体認証がOFFでPIN認証のみONの場合はPIN認証画面へ
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => PinAuthPage()),
+      );
+      return;
+    }
+
+    // いずれの認証も機能しなかった場合（または未対応の場合）は、メイン画面へ遷移
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => MainScreen()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(body: Center(child: CircularProgressIndicator()));
+  }
+}
+
+class PinAuthPage extends StatefulWidget {
+  @override
+  _PinAuthPageState createState() => _PinAuthPageState();
+}
+
+class _PinAuthPageState extends State<PinAuthPage> {
+  final TextEditingController _pinController = TextEditingController();
+  String? _storedPin;
+  String? _errorText;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStoredPin();
+  }
+
+  Future<void> _loadStoredPin() async {
+    _storedPin = await secureStorage.read(key: 'userPin');
+    // PIN未設定の場合はPIN設定画面へ
+    if (_storedPin == null) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => SetPinPage()),
+      );
+    }
+  }
+
+  void _verifyPin() async {
+    if (_pinController.text == _storedPin) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => MainScreen()),
+      );
+    } else {
+      setState(() {
+        _errorText = "PINが正しくありません";
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('PIN認証')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            TextField(
+              controller: _pinController,
+              obscureText: true,
+              decoration: InputDecoration(
+                labelText: 'PINコードを入力',
+                errorText: _errorText,
+              ),
+              keyboardType: TextInputType.number,
+            ),
+            SizedBox(height: 16),
+            ElevatedButton(onPressed: _verifyPin, child: Text('認証')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SetPinPage extends StatefulWidget {
+  @override
+  _SetPinPageState createState() => _SetPinPageState();
+}
+
+class _SetPinPageState extends State<SetPinPage> {
+  final TextEditingController _pinController = TextEditingController();
+  final TextEditingController _confirmPinController = TextEditingController();
+  String? _errorText;
+
+  void _savePin() async {
+    if (_pinController.text != _confirmPinController.text) {
+      setState(() {
+        _errorText = "PINが一致しません";
+      });
+      return;
+    }
+    await secureStorage.write(key: 'userPin', value: _pinController.text);
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => MainScreen()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('PIN設定')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            TextField(
+              controller: _pinController,
+              obscureText: true,
+              decoration: InputDecoration(labelText: '新しいPINコード'),
+              keyboardType: TextInputType.number,
+            ),
+            TextField(
+              controller: _confirmPinController,
+              obscureText: true,
+              decoration: InputDecoration(
+                labelText: 'PINコード確認',
+                errorText: _errorText,
+              ),
+              keyboardType: TextInputType.number,
+            ),
+            SizedBox(height: 16),
+            ElevatedButton(onPressed: _savePin, child: Text('PINを保存')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
@@ -43,11 +252,16 @@ void main() async {
       }
     }
   }
-  // ValueNotifierに反映させる
   globalMoodNotifier.value = Map.from(globalMoodMap);
   globalDiaryNotifier.value = Map.from(globalDiaryMap);
 
-  runApp(MyApp());
+  runApp(
+    MaterialApp(
+      title: 'Emonator',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: StartupScreen(), // 最初に認証画面を表示
+    ),
+  );
 }
 
 /// アプリ全体のルートウィジェット
@@ -185,6 +399,32 @@ class _HomePageState extends State<HomePage> {
     DateTime.now().month,
     1,
   );
+  // チュートリアル表示用フラグ
+  bool _showTutorial = false;
+
+  // 初回起動時かどうかを secureStorage から確認
+  @override
+  void initState() {
+    super.initState();
+    _checkTutorial();
+  }
+
+  Future<void> _checkTutorial() async {
+    String? seen = await secureStorage.read(key: 'hasSeenTutorial');
+    if (seen != 'true') {
+      setState(() {
+        _showTutorial = true;
+      });
+    }
+  }
+
+  // チュートリアル終了時の処理
+  Future<void> _dismissTutorial() async {
+    setState(() {
+      _showTutorial = false;
+    });
+    await secureStorage.write(key: 'hasSeenTutorial', value: 'true');
+  }
 
   // 指定された年月の日数を計算
   int daysInMonth(DateTime date) {
@@ -203,71 +443,71 @@ class _HomePageState extends State<HomePage> {
     int weekdayOffset = firstDay.weekday % 7;
     int totalCells = weekdayOffset + daysCount;
 
-    return Container(
-      color: Colors.grey.shade200, // 薄いグレーの背景
-      child: Column(
-        children: [
-          // 上部：◀▶付きの年月表示
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+    return Stack(
+      children: [
+        Container(
+          color: Colors.grey.shade200, // 薄いグレーの背景
+          child: Column(
             children: [
-              IconButton(
-                icon: Icon(Icons.arrow_left),
-                onPressed: () {
-                  setState(() {
-                    // 1か月前へ移動（DateTime は自動で年跨ぎも対応）
-                    _selectedMonth = DateTime(
-                      _selectedMonth.year,
-                      _selectedMonth.month - 1,
-                      1,
-                    );
-                  });
-                },
-              ),
-              GestureDetector(
-                onTap: () async {
-                  try {
-                    DateTime? picked = await showDatePicker(
-                      context: context,
-                      initialDate: _selectedMonth,
-                      firstDate: DateTime(2000),
-                      lastDate: DateTime(2100),
-                    );
-                    if (picked != null) {
+              // 上部：◀▶付きの年月表示
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    icon: Icon(Icons.arrow_left),
+                    onPressed: () {
                       setState(() {
-                        _selectedMonth = DateTime(picked.year, picked.month, 1);
+                        // 1か月前へ移動
+                        _selectedMonth = DateTime(
+                          _selectedMonth.year,
+                          _selectedMonth.month - 1,
+                          1,
+                        );
                       });
-                    }
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('日付選択中にエラーが発生しました: $e')),
-                    );
-                  }
-                },
-                child: Text(
-                  '${_selectedMonth.year}年${_selectedMonth.month}月',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                ),
+                    },
+                  ),
+                  GestureDetector(
+                    onTap: () async {
+                      try {
+                        DateTime? picked = await showDatePicker(
+                          context: context,
+                          initialDate: _selectedMonth,
+                          firstDate: DateTime(2000),
+                          lastDate: DateTime(2100),
+                        );
+                        if (picked != null) {
+                          setState(() {
+                            _selectedMonth = DateTime(picked.year, picked.month, 1);
+                          });
+                        }
+                      } catch (e) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('日付選択中にエラーが発生しました: $e')),
+                        );
+                      }
+                    },
+                    child: Text(
+                      '${_selectedMonth.year}年${_selectedMonth.month}月',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.arrow_right),
+                    onPressed: () {
+                      setState(() {
+                        _selectedMonth = DateTime(
+                          _selectedMonth.year,
+                          _selectedMonth.month + 1,
+                          1,
+                        );
+                      });
+                    },
+                  ),
+                ],
               ),
-
-              IconButton(
-                icon: Icon(Icons.arrow_right),
-                onPressed: () {
-                  setState(() {
-                    _selectedMonth = DateTime(
-                      _selectedMonth.year,
-                      _selectedMonth.month + 1,
-                      1,
-                    );
-                  });
-                },
-              ),
-            ],
-          ),
-          // 2. 曜日の表示
-          Row(
-            children:
-                ['日', '月', '火', '水', '木', '金', '土'].map((day) {
+              // 曜日の表示
+              Row(
+                children: ['日', '月', '火', '水', '木', '金', '土'].map((day) {
                   return Expanded(
                     child: Center(
                       child: Text(
@@ -277,117 +517,137 @@ class _HomePageState extends State<HomePage> {
                     ),
                   );
                 }).toList(),
-          ),
-          // 3. カレンダーグリッド
-          Expanded(
-            child: GridView.builder(
-              // ここを追加
-              //shrinkWrap: true,
-              physics:
-                  const BouncingScrollPhysics(), // または AlwaysScrollableScrollPhysics()
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 7,
-                crossAxisSpacing: 4,
-                mainAxisSpacing: 4,
-                childAspectRatio: 1.0, // <-- 高さ方向にゆとりをもたせる
               ),
-
-              itemCount: totalCells,
-              itemBuilder: (context, index) {
-                if (index < weekdayOffset) {
-                  return Container(); // 前月分の空セル
-                } else {
-                  int day = index - weekdayOffset + 1;
-                  DateTime cellDate = DateTime(
-                    _selectedMonth.year,
-                    _selectedMonth.month,
-                    day,
-                  );
-                  String key =
-                      '${cellDate.year}-${cellDate.month}-${cellDate.day}';
-                  DateTime now = DateTime.now();
-                  // 当日と比較（時刻は無視）
-                  bool isToday =
-                      (now.year == cellDate.year &&
+              // カレンダーグリッド
+              Expanded(
+                child: GridView.builder(
+                  physics: const BouncingScrollPhysics(),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 7,
+                    crossAxisSpacing: 4,
+                    mainAxisSpacing: 4,
+                    childAspectRatio: 1.0,
+                  ),
+                  itemCount: totalCells,
+                  itemBuilder: (context, index) {
+                    if (index < weekdayOffset) {
+                      return Container(); // 前月分の空セル
+                    } else {
+                      int day = index - weekdayOffset + 1;
+                      DateTime cellDate = DateTime(
+                        _selectedMonth.year,
+                        _selectedMonth.month,
+                        day,
+                      );
+                      String key = '${cellDate.year}-${cellDate.month}-${cellDate.day}';
+                      DateTime now = DateTime.now();
+                      bool isToday = (now.year == cellDate.year &&
                           now.month == cellDate.month &&
                           now.day == cellDate.day);
-                  // 日付表示用のウィジェットを共通化
-                  Widget dayCircle = Container(
-                    width: 30,
-                    height: 30,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color:
-                          isToday ? Colors.blue.shade900 : Colors.transparent,
-                    ),
-                    child: Center(
-                      child: Text(
-                        '$day',
-                        style: TextStyle(
-                          color: isToday ? Colors.white : Colors.black,
+                      // 日付表示用ウィジェット
+                      Widget dayCircle = Container(
+                        width: 30,
+                        height: 30,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: isToday ? Colors.blue.shade900 : Colors.transparent,
                         ),
-                      ),
-                    ),
-                  );
-                  // カレンダーグリッド内の日付セル（itemBuilder 内）
-                  return Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // 日付の部分：当日は背景付き（例：濃い青）で日付を白文字表示
-                      dayCircle,
-                      const SizedBox(height: 4),
-                      // 気分ボタン：全日共通のサイズに統一
-                      GestureDetector(
-                        onTap: () async {
-                          int? selectedMood = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => DiaryPage(date: cellDate),
+                        child: Center(
+                          child: Text(
+                            '$day',
+                            style: TextStyle(
+                              color: isToday ? Colors.white : Colors.black,
                             ),
-                          );
-                          if (selectedMood != null) {
-                            globalMoodMap[key] = selectedMood;
-                            globalMoodNotifier.value = Map.from(globalMoodMap);
-                            setState(() {});
-                          }
-                        },
-                        child: ValueListenableBuilder<Map<String, int>>(
-                          valueListenable: globalMoodNotifier,
-                          builder: (context, moodMap, child) {
-                            const double buttonSize = 20;
-                            final bool hasMood = moodMap.containsKey(key);
-                            return Container(
-                              width: buttonSize,
-                              height: buttonSize,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color:
-                                    hasMood
+                          ),
+                        ),
+                      );
+                      return Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          dayCircle,
+                          const SizedBox(height: 4),
+                          // 気分ボタン
+                          GestureDetector(
+                            onTap: () async {
+                              int? selectedMood = await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => DiaryPage(date: cellDate),
+                                ),
+                              );
+                              if (selectedMood != null) {
+                                globalMoodMap[key] = selectedMood;
+                                globalMoodNotifier.value = Map.from(globalMoodMap);
+                                setState(() {});
+                              }
+                            },
+                            child: ValueListenableBuilder<Map<String, int>>(
+                              valueListenable: globalMoodNotifier,
+                              builder: (context, moodMap, child) {
+                                const double buttonSize = 20;
+                                final bool hasMood = moodMap.containsKey(key);
+                                return Container(
+                                  width: buttonSize,
+                                  height: buttonSize,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: hasMood
                                         ? Colors.transparent
                                         : Colors.lightBlue.shade100,
-                              ),
-                              child: Center(
-                                child:
-                                    hasMood
+                                  ),
+                                  child: Center(
+                                    child: hasMood
                                         ? Icon(
-                                          kMoodIcons[moodMap[key]!],
-                                          size: buttonSize,
-                                          color: Colors.blue.shade900,
-                                        )
+                                            kMoodIcons[moodMap[key]!],
+                                            size: buttonSize,
+                                            color: Colors.blue.shade900,
+                                          )
                                         : Container(),
-                              ),
-                            );
-                          },
-                        ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      );
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        // チュートリアルオーバーレイ（初回のみ表示）
+        if (_showTutorial)
+          Positioned.fill(
+            child: Container(
+              color: Colors.black.withOpacity(0.7),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Emonatorへようこそ！\n\n'
+                        '・上部の矢印で月を切り替えます。\n'
+                        '・日付の下の丸ボタンをタップすると、その日の気分と日記を入力できます。\n'
+                        '・日付の下の丸ボタンに現在の気分が表示されます。',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white, fontSize: 18),
+                      ),
+                      const SizedBox(height: 24),
+                      ElevatedButton(
+                        onPressed: _dismissTutorial,
+                        child: Text('了解'),
                       ),
                     ],
-                  );
-                }
-              },
+                  ),
+                ),
+              ),
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
 }
@@ -827,27 +1087,99 @@ class _DatabasePageState extends State<DatabasePage> {
 }
 
 /// My Page（マイページ）
-class MyPage extends StatelessWidget {
+class MyPage extends StatefulWidget {
+  @override
+  _MyPageState createState() => _MyPageState();
+}
+
+class _MyPageState extends State<MyPage> {
+  bool _enableBiometric = false;
+  bool _enablePin = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAuthSettings();
+  }
+
+  Future<void> _loadAuthSettings() async {
+    String? biometricFlag = await secureStorage.read(key: 'enableBiometric');
+    String? pinFlag = await secureStorage.read(key: 'enablePin');
+    setState(() {
+      _enableBiometric = biometricFlag == 'true';
+      _enablePin = pinFlag == 'true';
+    });
+  }
+
+  Future<void> _updateAuthSetting(String key, bool value) async {
+    await secureStorage.write(key: key, value: value.toString());
+  }
+
+  /// ログアウト処理
+  Future<void> _logout() async {
+    // 必要に応じてセッション情報のクリア等の処理を追加
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => StartupScreen()),
+      (route) => false,
+    );
+  }
+
+  /// アカウント削除処理
+  Future<void> _deleteAccount() async {
+    bool confirm = await showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('アカウント削除'),
+          content: Text('本当にアカウントを削除してもよろしいですか？\nこの操作は元に戻せません。'),
+          actions: [
+            TextButton(
+              child: Text('キャンセル'),
+              onPressed: () {
+                Navigator.of(context).pop(false);
+              },
+            ),
+            TextButton(
+              child: Text('削除'),
+              onPressed: () {
+                Navigator.of(context).pop(true);
+              },
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm == true) {
+      // secureStorage の全データ削除（必要なキーのみ削除することも可能です）
+      await secureStorage.deleteAll();
+
+      // Hiveに保存されている日記データを削除
+      var diaryBox = await Hive.openBox('diary');
+      await diaryBox.clear();
+
+      // グローバル変数のクリア
+      globalMoodMap.clear();
+      globalDiaryMap.clear();
+      globalMoodNotifier.value = Map.from(globalMoodMap);
+      globalDiaryNotifier.value = Map.from(globalDiaryMap);
+
+      // ログアウト後、認証画面へ遷移
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => StartupScreen()),
+        (route) => false,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.grey.shade200, // センターの背景を薄いグレーに
+      color: Colors.grey.shade200,
       child: ListView(
         children: [
-          // アカウント情報セクション
-          ExpansionTile(
-            title: Text('アカウント情報'),
-            subtitle: Text('認証方法: Email'),
-            children: [
-              ListTile(
-                title: Text('UID: 12345678'),
-                onTap: () {
-                  // 詳細情報への遷移の準備
-                },
-              ),
-            ],
-          ),
-          Divider(),
           // サービスセクション
           ExpansionTile(
             title: Text('サービス'),
@@ -856,19 +1188,59 @@ class MyPage extends StatelessWidget {
               ListTile(
                 title: Text('利用規約'),
                 onTap: () {
-                  // 利用規約の画面への遷移の準備
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => TermsOfServicePage()),
+                  );
                 },
               ),
               ListTile(
                 title: Text('プライバシーポリシー'),
                 onTap: () {
-                  // プライバシーポリシーの画面への遷移の準備
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => PrivacyPolicyPage()),
+                  );
                 },
               ),
-              ListTile(
-                title: Text('ログアウト'),
-                onTap: () {
-                  // ログアウト処理の準備
+              ListTile(title: Text('ログアウト'), onTap: _logout),
+            ],
+          ),
+
+          Divider(),
+          // 認証設定セクション
+          ExpansionTile(
+            title: Text('認証設定'),
+            subtitle: Text('顔認証とPIN認証をON/OFFできます。両方ONの場合は顔認証優先、失敗時にPIN認証'),
+            children: [
+              SwitchListTile(
+                title: Text('顔認証'),
+                value: _enableBiometric,
+                onChanged: (bool value) {
+                  setState(() {
+                    _enableBiometric = value;
+                  });
+                  _updateAuthSetting('enableBiometric', value);
+                },
+              ),
+              SwitchListTile(
+                title: Text('PIN認証'),
+                value: _enablePin,
+                onChanged: (bool value) {
+                  setState(() {
+                    _enablePin = value;
+                  });
+                  _updateAuthSetting('enablePin', value);
+                  if (value) {
+                    secureStorage.read(key: 'userPin').then((pin) {
+                      if (pin == null) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => SetPinPage()),
+                        );
+                      }
+                    });
+                  }
                 },
               ),
             ],
@@ -879,11 +1251,53 @@ class MyPage extends StatelessWidget {
             title: Text('アカウント削除'),
             subtitle: Text('アカウント削除の準備中'),
             trailing: Icon(Icons.arrow_forward_ios),
-            onTap: () {
-              // 今後、アカウント削除処理を実装するための準備
-            },
+            onTap: _deleteAccount,
           ),
         ],
+      ),
+    );
+  }
+}
+
+// 利用規約画面
+class TermsOfServicePage extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('利用規約')),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(16.0),
+        child: Text(
+          'ここに利用規約の内容を記述してください。\n\n'
+          '【例】\n'
+          '1. 本サービスは、ユーザーが安心して利用できることを目的としています。\n'
+          '2. ユーザーは、本利用規約に同意の上でサービスを利用してください。\n'
+          '3. 当社は、必要に応じて本利用規約を変更する場合があります。\n'
+          '（以下、詳細な利用規約の文章を記載）',
+          style: TextStyle(fontSize: 16),
+        ),
+      ),
+    );
+  }
+}
+
+// プライバシーポリシー画面
+class PrivacyPolicyPage extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('プライバシーポリシー')),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(16.0),
+        child: Text(
+          'ここにプライバシーポリシーの内容を記述してください。\n\n'
+          '【例】\n'
+          '1. 当社は、ユーザーの個人情報を適切に保護します。\n'
+          '2. ユーザーの同意なく第三者に個人情報を提供することはありません。\n'
+          '3. 本ポリシーは、必要に応じて改訂されます。\n'
+          '（以下、詳細なプライバシーポリシーの文章を記載）',
+          style: TextStyle(fontSize: 16),
+        ),
       ),
     );
   }

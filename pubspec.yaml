@@ -41,6 +41,11 @@ dependencies:
   firebase_auth: ^5.5.0
   google_sign_in: ^6.2.2
   flame: ^1.25.0
+  hive: ^2.0.0              #追加
+  hive_flutter: ^1.0.0      #追加
+  local_auth: ^2.1.0               #追加
+  flutter_secure_storage: ^9.0.0   #追加
+  url_launcher: ^6.1.5             #追加
 
 dev_dependencies:
   flutter_test:
@@ -59,7 +64,6 @@ dev_dependencies:
 # The following section is specific to Flutter packages.
 flutter:
   assets:
-    - assets/images/IMG_4578.jpg
     - assets/images/chara.png
     - assets/documents/data.txt
   # The following line ensures that the Material Icons font is

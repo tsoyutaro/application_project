@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:local_auth/local_auth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // グローバル変数（ホームで選択した気分と日記の情報を保持するため）
 Map<String, int> globalMoodMap = {};
@@ -19,20 +19,22 @@ const List<IconData> kMoodIcons = [
 ];
 
 // ValueNotifier を利用してグローバル気分情報の更新を監視
-ValueNotifier<Map<String, int>> globalMoodNotifier = ValueNotifier(globalMoodMap);
-ValueNotifier<Map<String, String>> globalDiaryNotifier = ValueNotifier(globalDiaryMap);
+ValueNotifier<Map<String, int>> globalMoodNotifier = ValueNotifier(
+  globalMoodMap,
+);
+ValueNotifier<Map<String, String>> globalDiaryNotifier = ValueNotifier(
+  globalDiaryMap,
+);
 
 final FlutterSecureStorage secureStorage = FlutterSecureStorage();
 
-/// 起動時の認証処理を実施するウィジェット（認証設定がOFFならスルー）
+/// 起動時の認証処理を実施するウィジェット（PIN認証のみ利用）
 class StartupScreen extends StatefulWidget {
   @override
   _StartupScreenState createState() => _StartupScreenState();
 }
 
 class _StartupScreenState extends State<StartupScreen> {
-  final LocalAuthentication auth = LocalAuthentication();
-
   @override
   void initState() {
     super.initState();
@@ -40,65 +42,21 @@ class _StartupScreenState extends State<StartupScreen> {
   }
 
   Future<void> _checkAuth() async {
-    // secureStorageから認証設定を読み込む（未設定ならデフォルトはOFF）
-    String? biometricFlag = await secureStorage.read(key: 'enableBiometric');
+    // secureStorageからPIN認証設定を読み込む（未設定ならデフォルトはOFF）
     String? pinFlag = await secureStorage.read(key: 'enablePin');
-    bool enableBiometric = biometricFlag == 'true';
     bool enablePin = pinFlag == 'true';
 
-    // 認証設定がどちらもOFFの場合、すぐにメイン画面へ
-    if (!enableBiometric && !enablePin) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => MainScreen()),
-      );
-      return;
-    }
-
-    // 生体認証がONの場合、まず生体認証を試行
-    if (enableBiometric) {
-      bool authenticated = false;
-      try {
-        authenticated = await auth.authenticate(
-          localizedReason: 'アプリ利用のため認証してください',
-          options: const AuthenticationOptions(
-            stickyAuth: true,
-            biometricOnly: true,
-          ),
-        );
-      } catch (e) {
-        print('生体認証エラー: $e');
-      }
-      if (authenticated) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => MainScreen()),
-        );
-        return;
-      } else {
-        // 生体認証失敗時、PIN認証がONならPIN認証へ
-        if (enablePin) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => PinAuthPage()),
-          );
-          return;
-        }
-      }
-    } else if (enablePin) {
-      // 生体認証がOFFでPIN認証のみONの場合はPIN認証画面へ
+    if (enablePin) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => PinAuthPage()),
       );
-      return;
+    } else {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => MainScreen()),
+      );
     }
-
-    // いずれの認証も機能しなかった場合は、メイン画面へ遷移
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => MainScreen()),
-    );
   }
 
   @override
@@ -238,7 +196,9 @@ void main() async {
   for (var key in diaryBox.keys) {
     var entry = diaryBox.get(key);
     if (entry is Map) {
-      if (entry['mood'] != null && entry['mood'] is int && entry['mood'] != -1) {
+      if (entry['mood'] != null &&
+          entry['mood'] is int &&
+          entry['mood'] != -1) {
         globalMoodMap[key] = entry['mood'];
       }
       if (entry['diary'] != null && entry['diary'] is String) {
@@ -254,6 +214,7 @@ void main() async {
       title: 'Emonator',
       theme: ThemeData(primarySwatch: Colors.blue),
       home: StartupScreen(), // 最初に認証画面を表示
+      debugShowCheckedModeBanner: false, // これを追加
     ),
   );
 }
@@ -266,6 +227,7 @@ class MyApp extends StatelessWidget {
       title: 'Emonator',
       theme: ThemeData(primarySwatch: Colors.blue),
       home: MainScreen(),
+      //debugShowCheckedModeBanner: false,
     );
   }
 }
@@ -312,37 +274,38 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ),
       ),
-      floatingActionButton: _selectedIndex == 0
-          ? FloatingActionButton(
-              onPressed: () async {
-                DateTime now = DateTime.now();
-                DateTime today = DateTime(now.year, now.month, now.day);
-                try {
-                  int? selectedMood = await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => DiaryPage(date: today),
-                    ),
-                  );
-                  String key = '${today.year}-${today.month}-${today.day}';
-                  if (selectedMood != null) {
-                    globalMoodMap[key] = selectedMood;
-                  } else {
-                    globalMoodMap.remove(key);
+      floatingActionButton:
+          _selectedIndex == 0
+              ? FloatingActionButton(
+                onPressed: () async {
+                  DateTime now = DateTime.now();
+                  DateTime today = DateTime(now.year, now.month, now.day);
+                  try {
+                    int? selectedMood = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => DiaryPage(date: today),
+                      ),
+                    );
+                    String key = '${today.year}-${today.month}-${today.day}';
+                    if (selectedMood != null) {
+                      globalMoodMap[key] = selectedMood;
+                    } else {
+                      globalMoodMap.remove(key);
+                    }
+                    globalMoodNotifier.value = Map.from(globalMoodMap);
+                    if (mounted) {
+                      setState(() {});
+                    }
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('DiaryPage への遷移中にエラーが発生しました: $e')),
+                    );
                   }
-                  globalMoodNotifier.value = Map.from(globalMoodMap);
-                  if (mounted) {
-                    setState(() {});
-                  }
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('DiaryPage への遷移中にエラーが発生しました: $e')),
-                  );
-                }
-              },
-              child: const Icon(Icons.today),
-            )
-          : null,
+                },
+                child: const Icon(Icons.today),
+              )
+              : null,
       body: IndexedStack(index: _selectedIndex, children: _pages),
       bottomNavigationBar: BottomNavigationBar(
         items: const <BottomNavigationBarItem>[
@@ -377,7 +340,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   // 初期状態は当月の1日を基準とする
-  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
+  DateTime _selectedMonth = DateTime.now();
   // チュートリアル表示用フラグ
   bool _showTutorial = false;
 
@@ -404,9 +367,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   int daysInMonth(DateTime date) {
-    var beginningNextMonth = (date.month < 12)
-        ? DateTime(date.year, date.month + 1, 1)
-        : DateTime(date.year + 1, 1, 1);
+    var beginningNextMonth =
+        (date.month < 12)
+            ? DateTime(date.year, date.month + 1, 1)
+            : DateTime(date.year + 1, 1, 1);
     return beginningNextMonth.subtract(const Duration(days: 1)).day;
   }
 
@@ -450,7 +414,11 @@ class _HomePageState extends State<HomePage> {
                         );
                         if (picked != null) {
                           setState(() {
-                            _selectedMonth = DateTime(picked.year, picked.month, 1);
+                            _selectedMonth = DateTime(
+                              picked.year,
+                              picked.month,
+                              1,
+                            );
                           });
                         }
                       } catch (e) {
@@ -461,7 +429,10 @@ class _HomePageState extends State<HomePage> {
                     },
                     child: Text(
                       '${_selectedMonth.year}年${_selectedMonth.month}月',
-                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -480,13 +451,17 @@ class _HomePageState extends State<HomePage> {
               ),
               // 曜日の表示
               Row(
-                children: const ['日', '月', '火', '水', '木', '金', '土'].map((day) {
-                  return Expanded(
-                    child: Center(
-                      child: Text(day, style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  );
-                }).toList(),
+                children:
+                    const ['日', '月', '火', '水', '木', '金', '土'].map((day) {
+                      return Expanded(
+                        child: Center(
+                          child: Text(
+                            day,
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      );
+                    }).toList(),
               ),
               // カレンダーグリッド
               Expanded(
@@ -509,17 +484,23 @@ class _HomePageState extends State<HomePage> {
                         _selectedMonth.month,
                         day,
                       );
-                      String key = '${cellDate.year}-${cellDate.month}-${cellDate.day}';
+                      String key =
+                          '${cellDate.year}-${cellDate.month}-${cellDate.day}';
                       DateTime now = DateTime.now();
-                      bool isToday = (now.year == cellDate.year &&
-                          now.month == cellDate.month &&
-                          now.day == cellDate.day);
+                      bool isToday =
+                          (now.year == cellDate.year &&
+                              now.month == cellDate.month &&
+                              now.day == cellDate.day);
                       Widget dayCircle = Container(
-                        width: 30,
-                        height: 30,
+                        width: 20,
+                        height: 20,
                         decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: isToday ? Colors.blue.shade900 : Colors.transparent,
+                          //shape: BoxShape.circle,
+                          color:
+                              isToday
+                                  ? Colors.blue.shade900
+                                  : Colors.transparent,
+                          borderRadius: BorderRadius.circular(5.0),
                         ),
                         child: Center(
                           child: Text(
@@ -541,12 +522,15 @@ class _HomePageState extends State<HomePage> {
                               int? selectedMood = await Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (context) => DiaryPage(date: cellDate),
+                                  builder:
+                                      (context) => DiaryPage(date: cellDate),
                                 ),
                               );
                               if (selectedMood != null) {
                                 globalMoodMap[key] = selectedMood;
-                                globalMoodNotifier.value = Map.from(globalMoodMap);
+                                globalMoodNotifier.value = Map.from(
+                                  globalMoodMap,
+                                );
                                 setState(() {});
                               }
                             },
@@ -554,24 +538,37 @@ class _HomePageState extends State<HomePage> {
                               valueListenable: globalMoodNotifier,
                               builder: (context, moodMap, child) {
                                 const double buttonSize = 20;
-                                final bool hasMood = moodMap.containsKey(key);
+                                final bool hasMoodKey = moodMap.containsKey(
+                                  key,
+                                );
+                                final int? moodIndex =
+                                    hasMoodKey ? moodMap[key] : null;
+
+                                // moodIndex が -1 や null の場合はアイコン表示をスキップ
+                                final bool showMoodIcon =
+                                    (moodIndex != null &&
+                                        moodIndex >= 0 &&
+                                        moodIndex < kMoodIcons.length);
+
                                 return Container(
                                   width: buttonSize,
                                   height: buttonSize,
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
-                                    color: hasMood
-                                        ? Colors.transparent
-                                        : Colors.lightBlue.shade100,
+                                    color:
+                                        showMoodIcon
+                                            ? Colors.transparent
+                                            : Colors.lightBlue.shade100,
                                   ),
                                   child: Center(
-                                    child: hasMood
-                                        ? Icon(
-                                            kMoodIcons[moodMap[key]!],
-                                            size: buttonSize,
-                                            color: Colors.blue.shade900,
-                                          )
-                                        : const SizedBox.shrink(),
+                                    child:
+                                        showMoodIcon
+                                            ? Icon(
+                                              kMoodIcons[moodIndex],
+                                              size: buttonSize,
+                                              color: Colors.blue.shade900,
+                                            )
+                                            : const SizedBox.shrink(),
                                   ),
                                 );
                               },
@@ -594,23 +591,60 @@ class _HomePageState extends State<HomePage> {
               child: Center(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 32.0),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        'Emonatorへようこそ！\n\n'
-                        '・上部の矢印で月を切り替えます。\n'
-                        '・日付の下の丸ボタンをタップすると、その日の気分と日記を入力できます。\n'
-                        '・下の丸ボタンに現在の気分が表示されます。',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.white, fontSize: 18),
-                      ),
-                      const SizedBox(height: 24),
-                      ElevatedButton(
-                        onPressed: _dismissTutorial,
-                        child: const Text('了解'),
-                      ),
-                    ],
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      // 画面幅に応じてフォントサイズと余白を調整
+                      double fontSize = constraints.maxWidth * 0.05;
+                      double spacing = constraints.maxHeight * 0.02;
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Emonatorへようこそ！',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: fontSize,
+                            ),
+                          ),
+                          SizedBox(height: spacing),
+                          Text(
+                            '・上部の矢印で月を切り替えます。',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: fontSize,
+                            ),
+                          ),
+                          SizedBox(height: spacing),
+                          Text(
+                            '・日付の下の丸ボタンをタップすると、その日の気分と日記を入力できます。',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: fontSize,
+                            ),
+                          ),
+                          SizedBox(height: spacing),
+                          Text(
+                            '・下の丸ボタンに現在の気分が表示されます。',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: fontSize,
+                            ),
+                          ),
+                          SizedBox(height: spacing * 2),
+                          ElevatedButton(
+                            onPressed: _dismissTutorial,
+                            child: Text(
+                              '了解',
+                              style: TextStyle(fontSize: fontSize * 0.9),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),
@@ -648,7 +682,8 @@ class _DiaryPageState extends State<DiaryPage> {
     super.initState();
     _currentDate = widget.date;
     var diaryBox = Hive.box('diary');
-    String key = '${_currentDate.year}-${_currentDate.month}-${_currentDate.day}';
+    String key =
+        '${_currentDate.year}-${_currentDate.month}-${_currentDate.day}';
     var entry = diaryBox.get(key);
     if (entry != null) {
       _selectedMoodIndex = entry['mood'] ?? -1;
@@ -683,11 +718,14 @@ class _DiaryPageState extends State<DiaryPage> {
                 });
               }
             } catch (e) {
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(SnackBar(content: Text('日付選択中にエラーが発生しました: $e')));
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('日付選択中にエラーが発生しました: $e')));
             }
           },
-          child: Text('${_currentDate.year}/${_currentDate.month}/${_currentDate.day}'),
+          child: Text(
+            '${_currentDate.year}/${_currentDate.month}/${_currentDate.day}',
+          ),
         ),
       ),
       body: Padding(
@@ -701,11 +739,13 @@ class _DiaryPageState extends State<DiaryPage> {
                 return IconButton(
                   icon: Icon(
                     _moodIcons[index],
-                    color: _selectedMoodIndex == index ? Colors.blue : Colors.grey,
+                    color:
+                        _selectedMoodIndex == index ? Colors.blue : Colors.grey,
                   ),
                   onPressed: () {
                     setState(() {
-                      _selectedMoodIndex = _selectedMoodIndex == index ? -1 : index;
+                      _selectedMoodIndex =
+                          _selectedMoodIndex == index ? -1 : index;
                     });
                   },
                 );
@@ -732,30 +772,39 @@ class _DiaryPageState extends State<DiaryPage> {
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.all(16.0),
         child: ElevatedButton(
-          child: const Text('完了'),
+          child: const Text('保存'),
           onPressed: () {
             try {
               ScaffoldMessenger.of(context).clearSnackBars();
               var diaryBox = Hive.box('diary');
-              String key = '${_currentDate.year}-${_currentDate.month}-${_currentDate.day}';
-              if (_selectedMoodIndex == -1) {
+              String key =
+                  '${_currentDate.year}-${_currentDate.month}-${_currentDate.day}';
+
+              // 「気分が未選択」かつ「日記も空」の場合のみ、エントリごと削除
+              if (_selectedMoodIndex == -1 && _diaryController.text.isEmpty) {
                 globalMoodMap.remove(key);
+                globalDiaryMap.remove(key);
                 diaryBox.delete(key);
               } else {
+                // 気分が未選択(-1)でも日記は入力されているケースを許容
                 globalMoodMap[key] = _selectedMoodIndex;
+                globalDiaryMap[key] = _diaryController.text;
                 diaryBox.put(key, {
                   'mood': _selectedMoodIndex,
                   'diary': _diaryController.text,
                 });
               }
-              globalDiaryMap[key] = _diaryController.text;
               globalMoodNotifier.value = Map.from(globalMoodMap);
               globalDiaryNotifier.value = Map.from(globalDiaryMap);
-              int? moodToReturn = (_selectedMoodIndex == -1) ? null : _selectedMoodIndex;
+
+              // 戻り値としても、-1 のときは null を返す（呼び出し元が想定しているなら）
+              int? moodToReturn =
+                  (_selectedMoodIndex == -1) ? null : _selectedMoodIndex;
               Navigator.pop(context, moodToReturn);
             } catch (e) {
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(SnackBar(content: Text('保存中にエラーが発生しました: $e')));
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('保存中にエラーが発生しました: $e')));
             }
           },
         ),
@@ -782,7 +831,11 @@ class DatabasePage extends StatefulWidget {
 }
 
 class _DatabasePageState extends State<DatabasePage> {
-  DateTime _selectedDate = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+  DateTime _selectedDate = DateTime(
+    DateTime.now().year,
+    DateTime.now().month,
+    DateTime.now().day,
+  );
   late TextEditingController _diaryController;
   bool _isEditing = false; // 編集モード（初期はOFF）
   int _localMood = -1; // 編集モード中の気分状態。未選択は -1
@@ -793,7 +846,8 @@ class _DatabasePageState extends State<DatabasePage> {
   @override
   void initState() {
     super.initState();
-    String key = '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
+    String key =
+        '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
     _diaryController = TextEditingController(text: globalDiaryMap[key] ?? '');
     _localMood = globalMoodMap[key] ?? -1;
   }
@@ -808,14 +862,17 @@ class _DatabasePageState extends State<DatabasePage> {
   void _changeDateByDays(int days) {
     setState(() {
       _selectedDate = _selectedDate.add(Duration(days: days));
-      String newKey = '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
+      String newKey =
+          '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
       _diaryController.text = globalDiaryMap[newKey] ?? '';
       _localMood = globalMoodMap[newKey] ?? -1;
     });
   }
 
   Widget _buildDateRow() {
-    String dateText = '${_selectedDate.year}/${_selectedDate.month}/${_selectedDate.day}';
+    // どの日付でも「年/月/日」形式で表示
+    String dateText =
+        '${_selectedDate.year}/${_selectedDate.month}/${_selectedDate.day}';
     return Column(
       children: [
         // 日付表示と左右矢印
@@ -838,7 +895,8 @@ class _DatabasePageState extends State<DatabasePage> {
                   if (picked != null) {
                     setState(() {
                       _selectedDate = picked;
-                      String newKey = '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
+                      String newKey =
+                          '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
                       _diaryController.text = globalDiaryMap[newKey] ?? '';
                       _localMood = globalMoodMap[newKey] ?? -1;
                     });
@@ -851,7 +909,10 @@ class _DatabasePageState extends State<DatabasePage> {
               },
               child: Text(
                 dateText,
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
             IconButton(
@@ -860,7 +921,7 @@ class _DatabasePageState extends State<DatabasePage> {
             ),
           ],
         ),
-        // 編集ON/OFFスイッチ
+        // 編集ON/OFFスイッチ（保存処理部分は前回の修正例と同様）
         Row(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
@@ -868,7 +929,8 @@ class _DatabasePageState extends State<DatabasePage> {
             Switch(
               value: _isEditing,
               onChanged: (bool value) {
-                String key = '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
+                String key =
+                    '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
                 if (!value) {
                   // 編集OFF時の保存処理
                   if (_diaryController.text.length > 100) {
@@ -877,22 +939,18 @@ class _DatabasePageState extends State<DatabasePage> {
                     );
                     return;
                   }
-                  if (_localMood == -1) {
-                    globalMoodMap.remove(key);
-                    diaryBox.delete(key);
-                  } else {
-                    globalMoodMap[key] = _localMood;
-                  }
-                  globalMoodNotifier.value = Map.from(globalMoodMap);
+                  // 気分が未選択（-1）の場合も日記内容を保持する
+                  globalMoodMap[key] = _localMood;
                   diaryBox.put(key, {
                     'mood': _localMood,
                     'diary': _diaryController.text,
                   });
                   globalDiaryMap[key] = _diaryController.text;
+                  globalMoodNotifier.value = Map.from(globalMoodMap);
                   globalDiaryNotifier.value = Map.from(globalDiaryMap);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('保存しました')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('保存しました')));
                 } else {
                   // 編集ON時は最新の値を反映
                   _localMood = globalMoodMap[key] ?? -1;
@@ -953,7 +1011,8 @@ class _DatabasePageState extends State<DatabasePage> {
 
   @override
   Widget build(BuildContext context) {
-    String key = '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
+    String key =
+        '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}';
     return Container(
       color: Colors.grey.shade200,
       padding: const EdgeInsets.all(16.0),
@@ -989,12 +1048,15 @@ class _DatabasePageState extends State<DatabasePage> {
                     hintText: '日記を記入してください...',
                   ),
                   inputFormatters: [LengthLimitingTextInputFormatter(100)],
-                  onChanged: _isEditing
-                      ? (text) {
-                          globalDiaryMap[key] = text;
-                          globalDiaryNotifier.value = Map.from(globalDiaryMap);
-                        }
-                      : null,
+                  onChanged:
+                      _isEditing
+                          ? (text) {
+                            globalDiaryMap[key] = text;
+                            globalDiaryNotifier.value = Map.from(
+                              globalDiaryMap,
+                            );
+                          }
+                          : null,
                 ),
               );
             },
@@ -1012,7 +1074,6 @@ class MyPage extends StatefulWidget {
 }
 
 class _MyPageState extends State<MyPage> {
-  bool _enableBiometric = false;
   bool _enablePin = false;
 
   @override
@@ -1022,10 +1083,8 @@ class _MyPageState extends State<MyPage> {
   }
 
   Future<void> _loadAuthSettings() async {
-    String? biometricFlag = await secureStorage.read(key: 'enableBiometric');
     String? pinFlag = await secureStorage.read(key: 'enablePin');
     setState(() {
-      _enableBiometric = biometricFlag == 'true';
       _enablePin = pinFlag == 'true';
     });
   }
@@ -1106,42 +1165,43 @@ class _MyPageState extends State<MyPage> {
             children: [
               ListTile(
                 title: Text('利用規約'),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => TermsOfServicePage()),
+                onTap: () async {
+                  final url = Uri.parse(
+                    'https://ameblo.jp/rabbit-table/entry-12889631951.html',
                   );
+                  if (await canLaunchUrl(url)) {
+                    await launchUrl(url, mode: LaunchMode.externalApplication);
+                  } else {
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('URLを開けませんでした')));
+                  }
                 },
               ),
               ListTile(
                 title: Text('プライバシーポリシー'),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => PrivacyPolicyPage()),
+                onTap: () async {
+                  final url = Uri.parse(
+                    'https://ameblo.jp/rabbit-table/entry-12889629072.html',
                   );
+                  if (await canLaunchUrl(url)) {
+                    await launchUrl(url, mode: LaunchMode.externalApplication);
+                  } else {
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('URLを開けませんでした')));
+                  }
                 },
               ),
               ListTile(title: Text('ログアウト'), onTap: _logout),
             ],
           ),
-
           Divider(),
-          // 認証設定セクション
+          // 認証設定セクション（PIN認証のみ）
           ExpansionTile(
             title: Text('認証設定'),
-            subtitle: Text('顔認証とPIN認証をON/OFFできます。両方ONの場合は顔認証優先、失敗時にPIN認証'),
+            subtitle: Text('PIN認証のON/OFFができます'),
             children: [
-              SwitchListTile(
-                title: Text('顔認証'),
-                value: _enableBiometric,
-                onChanged: (bool value) {
-                  setState(() {
-                    _enableBiometric = value;
-                  });
-                  _updateAuthSetting('enableBiometric', value);
-                },
-              ),
               SwitchListTile(
                 title: Text('PIN認証'),
                 value: _enablePin,
@@ -1173,50 +1233,6 @@ class _MyPageState extends State<MyPage> {
             onTap: _deleteAccount,
           ),
         ],
-      ),
-    );
-  }
-}
-
-// 利用規約画面
-class TermsOfServicePage extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('利用規約')),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16.0),
-        child: Text(
-          'ここに利用規約の内容を記述してください。\n\n'
-          '【例】\n'
-          '1. 本サービスは、ユーザーが安心して利用できることを目的としています。\n'
-          '2. ユーザーは、本利用規約に同意の上でサービスを利用してください。\n'
-          '3. 当社は、必要に応じて本利用規約を変更する場合があります。\n'
-          '（以下、詳細な利用規約の文章を記載）',
-          style: TextStyle(fontSize: 16),
-        ),
-      ),
-    );
-  }
-}
-
-// プライバシーポリシー画面
-class PrivacyPolicyPage extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('プライバシーポリシー')),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16.0),
-        child: Text(
-          'ここにプライバシーポリシーの内容を記述してください。\n\n'
-          '【例】\n'
-          '1. 当社は、ユーザーの個人情報を適切に保護します。\n'
-          '2. ユーザーの同意なく第三者に個人情報を提供することはありません。\n'
-          '3. 本ポリシーは、必要に応じて改訂されます。\n'
-          '（以下、詳細なプライバシーポリシーの文章を記載）',
-          style: TextStyle(fontSize: 16),
-        ),
       ),
     );
   }
